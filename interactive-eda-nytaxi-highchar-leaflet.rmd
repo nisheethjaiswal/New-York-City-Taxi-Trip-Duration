@@ -1,0 +1,658 @@
+---
+title: "NYC Taxi Interactive EDA "
+author: "Nisheeth"
+date: "14082020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+Lets read some libraries
+```{r include = FALSE}
+
+
+
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(flexdashboard)
+library(TraMineR)
+#install.packages("highcharter")
+#install.packages("zoo")
+library(highcharter)
+library(DT)
+library(flexdashboard)
+library(leaflet)
+library(rmarkdown)
+library(DT)
+
+library(treemap)
+library(viridisLite)
+```
+
+
+Then read datasets
+I decided to use dataset with weather in NYC in 2016, so it require some data wrangling to join this 2 datasets. 
+
+
+
+
+```{r echo = FALSE}
+
+
+train_dataset <- fread("../input/nyc-taxi-trip-duration/train.csv")
+train_dataset[, pi_dt_shift :=  paste(substr(pickup_datetime, 1, 13), ":00:00", sep = "")]
+train_dataset[, df_dt_shift := paste(substr(dropoff_datetime, 1, 13), ":00:00", sep = "")]
+
+
+weather_nyc <-  fread("../input/knycmetars2016/KNYC_Metars.csv")
+
+
+
+```
+
+Lets see  how Conditions in weather_nyc dataset look like
+
+```{r echo = FALSE}
+
+
+
+weather_condition_freq <- weather_nyc %>%
+                          group_by(Conditions) %>%
+                          select(Conditions ) %>%
+                          summarize(count = n())
+
+
+datatable(weather_condition_freq)
+```
+
+
+Next step is to join 2 datasets and show some summary statistics 
+
+```{r echo = FALSE}
+
+train_joined <- dplyr::left_join(train_dataset, weather_nyc, by  = c("pi_dt_shift" = "Time"))
+
+train_joined$Conditions[is.na(train_joined$Conditions) ==  TRUE] <- "Unknown"
+
+
+
+weather_condition_freq <- train_joined %>%
+  group_by(Conditions) %>%
+  select(Conditions,trip_duration ) %>%
+  summarize(count = n(), 
+            mean_dur = mean(trip_duration, na.rm = TRUE), 
+            sd_dur =   sd(trip_duration, na.rm = TRUE), 
+            median_dur = median(trip_duration, na.rm = TRUE))
+
+
+datatable(weather_condition_freq)
+
+```
+
+
+Plot below shows how frequently users pickup taxi depend on different weather condition ^^
+
+I decide to shift Conditions value with NA to "Unknown category"
+
+it is obvious that the most frequent group is group with 'Clear' Condition.
+
+```{r}
+
+highchart()%>%
+hc_add_series(weather_condition_freq, "column", hcaes(x =  Conditions, y = count), name = "Count by Conditions Weather") %>%
+  hc_plotOptions(series = list(
+    showInLegend = FALSE, 
+    pointFormat = "{point.y}%"
+  ), 
+  column = list(colorByPoint = TRUE)) %>%
+  hc_subtitle(text = "Count by Conditions Caegories") %>%
+  hc_credits(
+    enabled = TRUE, 
+    text = "Source: Kaggle", 
+    href = "https://kaggle.com/damianpanek", 
+    style = list(fontSize = "12px")
+  ) %>%
+  hc_add_theme(hc_theme_google())
+
+
+
+```
+
+
+
+The plot below show simple summary statitics - Mean/Median and SD of TRIP Duration
+
+
+```{r echo = FALSE}
+
+
+
+highchart()%>%
+  hc_add_series(weather_condition_freq, "spline", hcaes(x =  Conditions, y = mean_dur), name = "Mean Trip Duration") %>%
+  hc_add_series(weather_condition_freq, "spline", hcaes(x =  Conditions, y = median_dur), name = "Median Trip Duration") %>%
+  hc_add_series(weather_condition_freq, "spline", hcaes(x =  Conditions, y = sd_dur), name = "SD Trip Duration") %>%
+  hc_plotOptions(series = list(
+    showInLegend = TRUE, 
+    pointFormat = "{point.y}%"
+  ), 
+  column = list(colorByPoint = TRUE)) %>%
+  hc_subtitle(text = "Count by Conditions Caegories") %>%
+  hc_credits(
+    enabled = TRUE, 
+    text = "Source: Kaggle", 
+    href = "https://kaggle.com/damianpanek", 
+    style = list(fontSize = "12px")
+  ) %>%
+  hc_add_theme(hc_theme_google())
+```
+
+
+Little data transformation. I want to get information of day/month and 
+day of week of observation.
+
+```{r echo = FALSE}
+
+
+
+train_joined <- data.table(train_joined)
+
+train_joined <- train_joined[is.na(pickup_datetime) == FALSE,  ]
+
+
+
+
+train_joined[, pickup_datetime := as.POSIXct(pickup_datetime, format = "%Y-%m-%d %H:%M:%S")]
+train_joined[, dropoff_datetime := as.POSIXct(dropoff_datetime, format = "%Y-%m-%d %H:%M:%S")]
+train_joined[, pickup_day := format(pickup_datetime, "%Y-%m-%d")]
+train_joined[, pickup_month := format(pickup_datetime, "%Y-%m")]
+
+
+train_joined[, dropoff_day := format(dropoff_datetime, "%Y-%m-%d")]
+train_joined[, dropoff_month := format(dropoff_datetime, "%Y-%m")]
+
+train_joined[, weekday := weekdays(pickup_datetime)]
+
+```
+
+
+Summary Statistics for Tempertarure in NYC   taxi dataset
+```{r}
+
+
+
+weather_temp_day <-  train_joined %>% 
+  group_by(pickup_day) %>%
+  select(pickup_day, Temp., Conditions) %>%
+  summarize(count = n(), 
+            min = min(Temp., na.rm = TRUE), 
+            max = max(Temp., na.rm = TRUE), 
+            sd_dur = sd(Temp., na.rm = TRUE))
+
+
+datatable(weather_temp_day)
+
+
+```
+
+```{r echo = FALSE}
+
+
+hchart(weather_temp_day, 
+        type = "columnrange", 
+        hcaes(x = pickup_day, low = min, high = max, color = sd_dur)) %>%
+        hc_chart(polar = TRUE) %>%
+    hc_yAxis(max = 30,  min = -10, labels = list(format = "{value} "), 
+             showFirstLabel = FALSE) %>%
+  hc_xAxis(
+  title = list(text = ""), gridLineWidth = 0.5,
+  labels = list(format = "{value: %b}")) %>%
+  hc_add_theme(hc_theme_google()) %>%
+hc_title(text = "Min/Max temperature daily, coloured by SD(Temp)")
+
+```
+
+
+Similar plot - Summary statistics for Trip Duration variable
+
+
+```{r echo = FALSE}
+
+weather_dur_day <-  train_joined %>% 
+  group_by(pickup_day) %>%
+  select(pickup_day, trip_duration, Conditions) %>%
+  summarize(count = n(), 
+            median = median(trip_duration, na.rm = TRUE), 
+            mean = mean(trip_duration, na.rm = TRUE), 
+            sd_dur = sd(trip_duration, na.rm = TRUE))
+
+
+datatable(weather_dur_day)
+
+
+```
+
+
+```{r echo = FALSE}
+
+
+hchart(weather_dur_day, 
+       type = "columnrange", 
+       hcaes(x = pickup_day, low = mean, high = median, color = median)) %>%
+  hc_chart(polar = TRUE) %>%
+  hc_yAxis( max = 1300, labels = list(format = "{value} "), 
+           showFirstLabel = FALSE) %>%
+  hc_xAxis(
+    title = list(text = ""), gridLineWidth = 0.5,
+    labels = list(format = "{value: %b}")) %>%
+  hc_add_theme(hc_theme_google()) %>% 
+  hc_title(text = "Trip duration Statistics per day")
+
+
+```
+
+
+Piechart for fwd/store flag 
+
+
+
+
+```{r echo = FALSE}
+
+
+
+
+store_and_fwd_freq <- train_dataset %>% 
+  select(store_and_fwd_flag) %>%
+  group_by(store_and_fwd_flag) %>%
+  summarize(count = n()) %>%
+  mutate(freq = count/sum(count))
+
+
+
+datatable(store_and_fwd_freq)
+
+
+```
+
+
+
+```{r echo = FALSE}
+hc <-  highchart() %>%
+      hc_add_series(store_and_fwd_freq, "pie", hcaes(x =  store_and_fwd_flag, y = count), name = "Column Plot") %>%
+  hc_plotOptions(series = list(
+    showInLegend = FALSE, 
+    pointFormat = "{point.y}%"
+  ), 
+  column = list(colorByPoint = TRUE)) %>%
+  hc_subtitle(text = "Frequency of Store And FWD FLAG") %>%
+  hc_credits(
+    enabled = TRUE, 
+    text = "Source: Kaggle", 
+    href = "https://kaggle.com/damianpanek", 
+    style = list(fontSize = "12px")
+  ) %>%
+  hc_add_theme(hc_theme_google())
+
+
+
+```
+
+
+Frequency plot - day by day 
+
+```{r echo = FALSE}
+
+freq_by_day <- train_joined %>%
+              select(pickup_day) %>%
+              group_by(pickup_day) %>%
+              summarize(count = n())
+
+
+datatable(freq_by_day)
+
+```
+
+
+```{r echo = FALSE}
+freq_day <- highchart() %>%
+            hc_add_series(freq_by_day, "column", 
+                          hcaes(x = pickup_day, y = count),name = "Column")  %>%
+                          hc_add_theme(hc_theme_google()) %>%
+                          hc_plotOptions(
+                            series = list(
+                              showInLegend = FALSE, 
+                              pointFormat = "{point.y}%"
+                            ), 
+                            column = list(
+                              colorByPoint = TRUE
+                            )
+                          ) %>% 
+  hc_yAxis(title = list("pickup per Day"), 
+           labels = list(format = "{value}"))   %>%
+  hc_xAxis(unique(as.character(freq_by_day$pickup_day))) %>%
+  hc_title(
+    text = "Graph represents amount of pickups per day"
+  ) %>%
+  hc_subtitle(text = "In sweet rainbow dash taste XD") %>%
+  hc_credits(
+    enabled = TRUE, text = "Damiano ;p/click",
+    href = "https://www.kaggle.com/damianpanek"
+  ) %>%
+  hc_add_theme(hc_theme_google())
+
+freq_day
+```
+
+Similar plot but observation divided by month
+
+```{r echo =FALSE}
+
+
+
+freq_by_month <- train_joined %>%
+  select(pickup_month) %>%
+  group_by(pickup_month) %>%
+  summarize(count = n())
+
+
+datatable(freq_by_month)
+```
+
+
+```{r echo  = FALSE}
+freq_month <- highchart() %>%
+  hc_add_series(freq_by_month, "column", 
+                hcaes(x = pickup_month, y = count),name = "Column")  %>%
+  hc_add_theme(hc_theme_google()) %>%
+  hc_plotOptions(
+    series = list(
+      showInLegend = FALSE, 
+      pointFormat = "{point.y}%"
+    ), 
+    column = list(
+      colorByPoint = TRUE
+    )
+  ) %>% 
+  hc_yAxis(title = list("pickup per Month"), 
+           labels = list(format = "{value}"))   %>%
+  hc_xAxis( unique(as.character(freq_by_month$pickup_month))) %>%
+  hc_title(
+    text = "Graph represents amount of pickups per day"
+  ) %>%
+  hc_subtitle(text = "UP 20170723") %>%
+  hc_credits(
+    enabled = TRUE, text = "Damiano ;p/click",
+    href = "https://www.kaggle.com/damianpanek"
+  )
+
+
+
+freq_by_month
+```
+
+
+
+Summary statistics for trip_duration - daily
+
+
+```{r echo = FALSE}
+
+
+
+freq_by_day_trip <- train_joined %>%
+  select(pickup_day, trip_duration) %>%
+  
+  group_by(pickup_day) %>%
+  summarize(count = n(), 
+            mean_trip = mean(trip_duration, na.rm = TRUE), 
+            median_trip = median(trip_duration, na.rm = TRUE), 
+            sd_trip     = sd(trip_duration, na.rm = TRUE))
+
+
+datatable(freq_by_day_trip)
+
+```
+
+
+```{r echo = FALSE}
+
+
+hc_by_day <- highchart() %>%
+  hc_plotOptions(
+    series = list(
+      showInLegend = FALSE, 
+      pointFormat = "{point.y}%"
+    ), 
+    column = list(
+      colorByPoint = TRUE
+    )
+  ) %>% 
+  highchart() %>%
+  hc_add_series(freq_by_day_trip, "line",  hcaes(x = pickup_day, y = mean_trip),name = "Mean") %>%
+  hc_add_series(freq_by_day_trip,   "line" , hcaes(x=  pickup_day,  y= median_trip), name = "median") %>%
+  hc_add_series(freq_by_day_trip, "line", hcaes(x =  pickup_day, y = sd_trip), name = "sd") %>% 
+  hc_add_theme(hc_theme_google()) %>%
+  hc_title(text = "Summary statistics by Day of pickup :)") %>%
+  hc_plotOptions(
+    series = list(
+      showInLegend = FALSE, 
+      pointFormat = "{point.y}%"
+    ), 
+    column = list(
+      colorByPoint = TRUE
+    )
+  ) %>% 
+  hc_yAxis(title = list("Values/day"), 
+           labels = list(format = "{value}"))   %>%
+  hc_subtitle(text = "Summary statistics grouped by day") %>%
+  hc_credits(
+    enabled = TRUE, text = "Damiano ;p/click",
+    href = "https://www.kaggle.com/damianpanek"
+  )
+
+
+hc_by_day
+```
+
+
+
+
+```{r echo = FALSE}
+
+freq_by_month_trip <- train_joined %>%
+    select(pickup_month, trip_duration) %>%
+    group_by(pickup_month)  %>%
+    summarize(count  = n(), 
+              mean_trip = mean(trip_duration, na.rm = TRUE), 
+              median_trip = median(trip_duration, na.rm = TRUE), 
+              sd_trip = sd(trip_duration, na.rm = TRUE))
+
+
+
+datatable(freq_by_month_trip)
+```
+
+
+```{r echo = FALSE}
+hc_by_month <- highchart() %>%
+  hc_plotOptions(
+    series = list(
+      showInLegend = FALSE, 
+      pointFormat = "{point.y}%"
+    ), 
+    column = list(
+      colorByPoint = TRUE
+    )
+  ) %>% 
+  highchart() %>%
+  hc_add_series(freq_by_month_trip, "line",  hcaes(x = pickup_month, y = mean_trip),name = "Mean") %>%
+  hc_add_series(freq_by_month_trip,   "line" , hcaes(x=  pickup_month,  y= median_trip), name = "median") %>%
+  hc_add_series(freq_by_month_trip, "line", hcaes(x =  pickup_month, y = sd_trip), name = "sd") %>% 
+  hc_xAxis(categories = c("2016-01", "2016-02", "2016-03", "2016-04", "2016-05", "2016-06")) %>%
+  hc_add_theme(hc_theme_google()) %>%
+  hc_title(text = "Summary statistics by Month of pickup :)")
+  
+hc_by_month                
+
+
+```
+
+# Leaflet section
+
+First we have to rbind drop and pick rows to create sequence. 
+Then i decide to create leaflet using makecluster options. 
+In my opinion it looks very nice ^^ last leaflet plot is a try and it will be updated, but id you are bored 
+then you can draw a line and check it actual length ;p
+
+
+Update : drawing in leaflet does not work  on kaggle :(
+
+
+```{r echo = FALSE}
+
+library(leaflet)
+library(leaflet.extras)
+
+
+lon_lat <- train_joined[, c("pickup_longitude", "pickup_latitude", 
+                            "dropoff_longitude", "dropoff_latitude")]
+
+
+
+
+
+lon_lat$rown <- as.numeric(rownames(lon_lat))
+
+
+
+lon_min <- lon_lat[rown < 300 ,]
+
+str(lon_min)
+drop <- lon_min[, c("pickup_longitude", "pickup_latitude", "rown")]
+pick <- lon_min[, c("dropoff_longitude", "dropoff_latitude", "rown")]
+
+
+colnames(drop)  <- c("lon", "lat", "rown")
+colnames(pick) <- colnames(drop)
+
+
+all_bin_min <- bind_rows(drop, pick)
+
+
+all_bin_min$rown2 <- rep(1:nrow(all_bin_min)+1/2,each = 2)
+
+
+
+
+
+leaflet(data = all_bin_min) %>% addTiles() %>%
+  addCircles(~lon, ~lat) %>%
+  addPolygons(data = all_bin_min, lng = ~lon, 
+               lat = ~lat, 
+               stroke = 0.03, color =  "blue", weight = 0.4, 
+               opacity = 1.2)  %>% enableMeasurePath() 
+
+
+
+
+
+```
+
+
+Leaflex plot with makecluster options 
+
+
+```{r echo = FALSE}
+ leaflet(data = train_joined[1:50000, ]) %>% addTiles() %>%
+  addMarkers(~pickup_longitude, ~pickup_latitude, clusterOptions = markerClusterOptions()) 
+```
+
+
+
+Leaflet heatmap 
+
+
+```{r echo = FALSE}
+
+train_count <- train_joined %>% 
+                select(pickup_latitude, pickup_longitude) %>%
+                group_by(pickup_latitude, pickup_longitude) %>%
+                summarize(count = n())
+
+
+train_count <- train_count[train_count$count >1,]
+
+
+
+ leaflet(data = train_count) %>% addTiles() %>% 
+ addHeatmap(lng = ~pickup_longitude, lat = ~pickup_latitude, intensity = ~count,
+             blur = 20, max = 0.05, radius = 15)
+
+
+```
+
+
+
+# Pickup grouped by month
+
+```{r echo = FALSE}
+
+train_count <- train_joined %>% 
+                select(pickup_latitude, pickup_longitude, pickup_month) %>%
+                group_by(pickup_latitude, pickup_longitude, pickup_month) %>%
+                summarize(count = n())
+
+
+train_count <- train_count[train_count$count >1,]
+
+
+
+ leaflet(data = train_count) %>% addTiles() %>% 
+ addHeatmap(lng = ~pickup_longitude, lat = ~pickup_latitude,
+ layerId = ~pickup_month, group = ~pickup_month, intensity = ~count,
+             blur = 20, max = 0.05, radius = 15)
+
+```
+
+
+
+    
+Frequency by  day of week :)
+
+```{r}
+
+count_weekday <- train_joined %>%
+                  select(weekday) %>%
+                  group_by(weekday) %>%
+                  summarize(count = n())
+
+count_weekday <- data.table(count_weekday)
+
+
+count_weekday <- count_weekday[is.na(weekday)  ==  FALSE, ]
+
+count_weekday <- data.frame(count_weekday)
+
+tm <- treemap(count_weekday , index = c("weekday"),
+              vSize = "count")
+
+
+
+hctreemap(tm)
+
+```
+
+```{r}
+
+
+tm
+
+```
+todo : complex maps
+todo: new dataset
+
